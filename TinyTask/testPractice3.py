@@ -96,24 +96,74 @@ for col in binary_cols:
     train[col] = train[col].astype(bool).astype(int)
     test[col] = test[col].astype(bool).astype(int)
 
-# ========== 12. 建模 ==========
+# ========== 12. 多模型对比 ==========
 feature_cols = ['HomePlanet', 'CryoSleep', 'Destination', 'Age', 'VIP',
                 'RoomService', 'FoodCourt', 'ShoppingMall', 'Spa', 'VRDeck',
                 'Deck', 'Side', 'TotalSpend']
 
-# OneHot
 train_encoded = pd.get_dummies(train[feature_cols])
 test_encoded = pd.get_dummies(test[feature_cols])
 train_encoded, test_encoded = train_encoded.align(test_encoded, join='left', axis=1, fill_value=0)
 
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import cross_val_score
+from sklearn.linear_model import LogisticRegression
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.svm import SVC
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import (RandomForestClassifier, GradientBoostingClassifier,
+                               HistGradientBoostingClassifier, VotingClassifier)
 
 X, y = train_encoded, train['Transported']
 
-model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
-scores = cross_val_score(model, X, y, cv=5, scoring='accuracy')
+# 定义候选模型
+models = {
+    'LogisticRegression':    LogisticRegression(max_iter=1000, random_state=42),
+    'KNN (k=5)':             KNeighborsClassifier(n_neighbors=5),
+    'SVM (rbf)':             SVC(kernel='rbf', random_state=42),
+    'DecisionTree':          DecisionTreeClassifier(max_depth=10, random_state=42),
+    'RandomForest':          RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1),
+    'GradientBoosting':      GradientBoostingClassifier(n_estimators=100, max_depth=5, random_state=42),
+    'HistGradientBoosting':  HistGradientBoostingClassifier(max_iter=200, random_state=42),
+}
 
-print(f"\n=== 交叉验证准确率: {scores.mean():.4f} (+/- {scores.std():.4f}) ===")
+# 逐个评估
+print("\n=== 多模型 5折交叉验证准确率对比 ===\n")
+results = {}
+for name, model in models.items():
+    scores = cross_val_score(model, X, y, cv=5, scoring='accuracy')
+    results[name] = (scores.mean(), scores.std())
+    print(f"  {name:<24s}  {scores.mean():.4f}  (+/- {scores.std():.4f})")
+
+# 找出最佳模型
+best_name = max(results, key=lambda k: results[k][0])
+print(f"\n最佳: {best_name} = {results[best_name][0]:.4f}")
+
+# ========== 13. 软投票集成 (Voting Ensemble) ==========
+print("\n=== 软投票集成 (Soft Voting) ===")
+voting = VotingClassifier(estimators=[
+    ('rf',   models['RandomForest']),
+    ('gb',   models['GradientBoosting']),
+    ('hgb',  models['HistGradientBoosting']),
+], voting='soft')
+
+scores = cross_val_score(voting, X, y, cv=5, scoring='accuracy')
+print(f"  Voting (RF+GB+HGB):     {scores.mean():.4f}  (+/- {scores.std():.4f})")
+
+# ========== 14. 模型选型小结 ==========
+print("""
+=== 模型选型小结 ===
+┌──────────────────────────┬──────────────────────────────────┐
+│ 模型                      │ 适用场景                          │
+├──────────────────────────┼──────────────────────────────────┤
+│ LogisticRegression       │ 基线模型，可解释性强               │
+│ KNN                      │ 小数据、局部模式                    │
+│ SVM (rbf)                │ 高维数据、非线性边界                │
+│ DecisionTree             │ 可解释、特征重要性                  │
+│ RandomForest             │ 鲁棒、抗过拟合、特征多             │
+│ GradientBoosting         │ 精度高、逐步纠错                   │
+│ HistGradientBoosting     │ 速度更快、大规模数据               │
+│ Voting (Soft)            │ 取长补短、降低方差                 │
+└──────────────────────────┴──────────────────────────────────┘
+""")
 
 print("\n训练完成！")
